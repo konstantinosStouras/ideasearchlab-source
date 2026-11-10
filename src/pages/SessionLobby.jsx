@@ -1,3 +1,4 @@
+import { useGroupRoster } from '../utils/useGroupRoster'
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { collection, onSnapshot, query, where, doc, db } from '../utils/db'
@@ -15,13 +16,13 @@ export default function SessionLobby() {
   const { session, loading } = useSession()
   const ended = useSessionEnded()
   const navigate = useNavigate()
-  const [participants, setParticipants] = useState([])
   const [myStatus, setMyStatus] = useState(null)
 
   // This participant's own doc — the routing signal, and where their group id
   // comes from. Kept separate from the group listener below so routing still
   // works before a group is known.
   const [myGroupId, setMyGroupId] = useState(null)
+  const participants = useGroupRoster(sessionId, myGroupId)
   useEffect(() => {
     if (!sessionId || !user) return
     const unsub = onSnapshot(
@@ -43,15 +44,7 @@ export default function SessionLobby() {
   // "your group is full" from the SESSION total, so with 70 students everyone
   // (including the lone member of the last, undersized group) was told their
   // group of 3 was full and would start soon. It never did.
-  useEffect(() => {
-    if (!sessionId || !myGroupId) return
-    const unsub = onSnapshot(
-      query(collection(db, 'sessions', sessionId, 'participants'), where('groupId', '==', myGroupId)),
-      snap => setParticipants(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
-      err => console.error('Lobby group listener error:', err)
-    )
-    return unsub
-  }, [sessionId, myGroupId])
+
 
   // React to phase/status changes
   useEffect(() => {
@@ -112,8 +105,8 @@ export default function SessionLobby() {
               <>
                 <p className={styles.desc}>
                   {needed > 0
-                    ? `Waiting for ${needed} more participant${needed === 1 ? '' : 's'} to join before your group can begin.`
-                    : 'Your group is full. Starting soon...'}
+                    ? `Your group is being formed with ${groupSize} members, including you. ${filled} have joined so far. Waiting for ${needed} more participant${needed === 1 ? '' : 's'} to join your group. Your first stage opens automatically when the group is ready.`
+                    : `All ${totalCount} members of your group have joined. Opening your first stage automatically. You do not need to refresh.`}
                 </p>
                 <div className={styles.stats}>
                   <div className={styles.stat}>

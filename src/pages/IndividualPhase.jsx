@@ -1,3 +1,4 @@
+import { useGroupRoster } from '../utils/useGroupRoster'
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
@@ -37,7 +38,7 @@ import styles from './IndividualPhase.module.css'
 // round-trip. The hold keeps the flow fully automatic (no click, so nobody can
 // stall their group by walking away); it only refuses to leave before the
 // screen has been readable, counting the remaining seconds down in the note.
-const CONFIRM_HOLD_MS = 15000
+const CONFIRM_HOLD_MS = 0 // Advance as soon as this group is ready.
 
 export default function IndividualPhase() {
   const { sessionId } = useParams()
@@ -59,8 +60,8 @@ export default function IndividualPhase() {
   const submittedAtRef = useRef(0)
   const pendingPathRef = useRef(null)
   const [holdLeft, setHoldLeft] = useState(0)
-  const [groupMembers, setGroupMembers] = useState([])
   const [groupId, setGroupId] = useState(null)
+  const groupMembers = useGroupRoster(sessionId, groupId)
   const [started, setStarted] = useState(false)
   // Has the participant's own document arrived yet? Until it has, `started` and
   // `done` are both false and the page rendered the INSTRUCTIONS screen — so
@@ -161,12 +162,8 @@ export default function IndividualPhase() {
         // stop showing its loading state either way.
         setParticipantLoaded(true)
         if (!snap.exists()) return
-        // `estimate` fills a still-pending serverTimestamp with a local value.
-        // Read as 'none' (the default) it comes back NULL, so for one round-trip
-        // after pressing Start or Proceed the new stage had no anchor: the page
-        // fell back to the previous stage's clock, which had just expired and
-        // therefore read 0:00 on a screen the participant had just entered.
-        const data = snap.data({ serverTimestamps: 'estimate' })
+        // Wait for committed server timestamps before arming the synchronized timer.
+        const data = snap.data()
         setGroupId(data.groupId)
         setIndividualStartedAt(data.individualStartedAt || null)
         setSelectionStartedAt(data.individualSelectionStartedAt || null)
@@ -236,17 +233,7 @@ export default function IndividualPhase() {
     return () => clearInterval(id)
   }, [holding, navigate])
 
-  useEffect(() => {
-    if (!sessionId || !groupId) return
-    const unsub = onSnapshot(
-      query(
-        collection(db, 'sessions', sessionId, 'participants'),
-        where('groupId', '==', groupId)
-      ),
-      snap => setGroupMembers(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-    )
-    return unsub
-  }, [sessionId, groupId])
+
 
   async function submitIdea(e) {
     e.preventDefault()
@@ -260,7 +247,7 @@ export default function IndividualPhase() {
         description: d,
         text: `${t}: ${d}`,
         authorId: user.uid,
-        authorName: user.displayName || user.email,
+        authorName: 'Participant',
         phase: 'individual',
         groupId: null,
         votes: 0,
@@ -289,7 +276,10 @@ export default function IndividualPhase() {
     const updates = { individualStage: 'selection' }
     if (!selectionStartedAt) updates.individualSelectionStartedAt = serverTimestamp()
     updateDoc(doc(db, 'sessions', sessionId, 'participants', user.uid), updates)
-      .catch(err => console.warn('Could not save individual stage:', err.message))
+      .catch(err => {
+        stageRef.current = 'generation'; setStage('generation')
+        setSubmitError('Could not save the stage change. Check your connection and try again.')
+      })
   }
 
   // Step back to the ideas list. The selection countdown, once started, keeps
@@ -302,7 +292,10 @@ export default function IndividualPhase() {
     if (!sessionId || !user) return
     updateDoc(doc(db, 'sessions', sessionId, 'participants', user.uid),
       { individualStage: 'generation' })
-      .catch(err => console.warn('Could not save individual stage:', err.message))
+      .catch(err => {
+        stageRef.current = 'generation'; setStage('generation')
+        setSubmitError('Could not save the stage change. Check your connection and try again.')
+      })
   }
 
   function toggleSelect(ideaId) {
@@ -532,6 +525,8 @@ export default function IndividualPhase() {
       )
     } catch (err) {
       console.warn('Could not record individual start time:', err.message)
+      setStarted(false)
+      setSubmitError('Could not start your timer. Check your connection and press Start again.')
     }
   }
 
@@ -565,6 +560,7 @@ export default function IndividualPhase() {
         <div className={styles.instrContainer}>
           <NudgeBanner sessionId={sessionId} autoMessage={autoNudgeMessage} />
           <div className={styles.instrCard}>
+            {submitError && <p role="alert">{submitError}</p>}
             <div className={styles.instrBody}>
               <RichText html={c.instructions} vars={contentVars} aiOn={!!aiEnabled} />
             </div>
@@ -592,7 +588,7 @@ export default function IndividualPhase() {
     const byComputer = i => computerIds.has(i.id) || carriedBy(i) === SELECTED_BY.COMPUTER
     const carried = submitted.filter(isCarried)
     const computerCount = carried.filter(byComputer).length
-    const groupSize = session?.phaseConfig?.groupSize ?? 3
+    const groupSize = groupMembers.length || (session?.phaseConfig?.groupSize ?? 3)
     const firestoreCount = groupMembers.filter(m => m.individualComplete).length
     const selfCounted = groupMembers.some(m => m.id === user?.uid && m.individualComplete)
     const doneCount = !selfCounted ? firestoreCount + 1 : firestoreCount
@@ -655,8 +651,8 @@ export default function IndividualPhase() {
               {holdLeft > 0
                 ? `Your ideas are saved. ${groupPhaseActive ? 'The group phase' : 'The next step'} starts in ${holdLeft}s...`
                 : (groupSize === 1 || !groupPhaseActive)
-                  ? 'Your ideas are saved. Please wait for the session to advance.'
-                  : `${doneCount} of ${groupSize} group members have submitted. The group phase will start automatically as soon as the rest of your group get here.`}
+                  ? 'Your ideas are saved. Opening your next stage automatically...'
+                  : `You are in a group of ${groupSize} members, including you. ${Math.max(0, groupSize - doneCount)} other group member${groupSize - doneCount === 1 ? '' : 's'} still need to finish the individual stage and submit their ideas. Your group stage opens automatically when all ${groupSize} members are ready. You do not need to submit again.`}
             </div>
           </div>
         </div>
@@ -754,7 +750,7 @@ export default function IndividualPhase() {
       })()}
 
       {done && (() => {
-        const groupSize = session?.phaseConfig?.groupSize ?? 3
+        const groupSize = groupMembers.length || (session?.phaseConfig?.groupSize ?? 3)
         const firestoreCount = groupMembers.filter(m => m.individualComplete).length
         const selfCounted = groupMembers.some(m => m.id === user?.uid && m.individualComplete)
         const doneCount = (done && !selfCounted) ? firestoreCount + 1 : firestoreCount

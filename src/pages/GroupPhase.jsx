@@ -1,3 +1,4 @@
+import { useGroupRoster } from '../utils/useGroupRoster'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
@@ -36,7 +37,7 @@ const DIVERGE_COOLDOWN_MS = 90000
 // backend flips the group to the next phase the moment the LAST member submits,
 // which for a solo group is the same instant, so without a hold the group's
 // result flashed past. Keep the two values together.
-const CONFIRM_HOLD_MS = 15000
+const CONFIRM_HOLD_MS = 0 // Results remain visible above the survey; no forced waiting.
 
 // The group's final ideas, tallied the way the backend does it
 // (`finishGroupVoting`): most votes first, top 3. Used while its write is still
@@ -64,12 +65,36 @@ function formatTime(timestamp) {
 function IdeaPill({
   idea, variant, label, isMe, isVoting, votesLocked,
   voteCount, votedByMe, canVote, onVote, showPhaseTag,
-  rank = 0, memberCount = 0,
+  rank = 0, memberCount = 0, onEdit,
 }) {
   // An idea the group has put votes on is the thing everyone is trying to read
   // off this list, so it is marked on the CARD, not just in a small tag: a tinted
   // accent edge for anything with votes, stronger for the ones currently in the
   // group's top three (the set that becomes the group's picks).
+  const [editing, setEditing] = useState(false)
+  const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => { if (isVoting || votesLocked) setEditing(false) }, [isVoting, votesLocked])
+  if (editing && !isVoting && !votesLocked) return (
+    <form className={styles.addPill} onSubmit={async e => {
+      e.preventDefault()
+      if (saving || !title.trim() || !description.trim()) return
+      setSaving(true); setError('')
+      try { await onEdit(idea.id, title.trim(), description.trim()); setEditing(false) }
+      catch { setError('Could not save your idea. Your edits are still here. Please try again.') }
+      finally { setSaving(false) }
+    }}>
+      <input aria-label="Edit idea title" className={styles.addTitleInput} value={title} onChange={e => setTitle(e.target.value)} disabled={saving} />
+      <textarea aria-label="Edit idea description" className={styles.addDescInput} value={description} onChange={e => setDescription(e.target.value)} disabled={saving} />
+      {error && <p role="alert">{error}</p>}
+      <div className={styles.addFooter}>
+        <button type="button" disabled={saving} onClick={() => setEditing(false)}>Cancel</button>
+        <button type="submit" className="btn-primary" disabled={saving || !title.trim() || !description.trim()}>{saving ? 'Saving...' : 'Save changes'}</button>
+      </div>
+    </form>
+  )
   const hasVotes = isVoting && voteCount > 0
   const votesTitle = memberCount
     ? `${voteCount} of ${memberCount} group member${memberCount === 1 ? '' : 's'} voted for this idea`
@@ -123,6 +148,11 @@ function IdeaPill({
             a MOUSE idiom — on a tablet the double-tap is claimed by Safari's
             zoom gesture and the `title` tooltip explaining it never shows, so
             voting was effectively unreachable there. Also the keyboard path. */}
+        {!isVoting && !votesLocked && isMe && variant === 'group' && (
+          <button type="button" className={styles.voteBtn} onClick={() => {
+            setTitle(idea.title || idea.text || ''); setDescription(idea.description || ''); setEditing(true)
+          }}>Edit</button>
+        )}
         {isVoting && (
           <button
             type="button"
@@ -207,8 +237,8 @@ export default function GroupPhase() {
   const aiModel = useAIModelLabel()
   const navigate = useNavigate()
   const [groupId, setGroupId] = useState(null)
+  const members = useGroupRoster(sessionId, groupId)
   const [memberLabels, setMemberLabels] = useState({})
-  const [members, setMembers] = useState([])
   const [ideas, setIdeas] = useState({ individual: [], group: [] })
   const [newTitle, setNewTitle] = useState('')
   const [newDesc, setNewDesc] = useState('')
@@ -253,6 +283,9 @@ export default function GroupPhase() {
   const [subPhase, setSubPhase] = useState('ideation')
   const [votesLocked, setVotesLocked] = useState(false)
   const [voteError, setVoteError] = useState('')
+  const ballotBusy = useRef(false)
+  const [votePending, setVotePending] = useState(false)
+  const [ownVotes, setOwnVotes] = useState([])
   const subPhaseInit = useRef(false)
   // Voting-confirmation hold (see CONFIRM_HOLD_MS): once the WHOLE group has
   // submitted its votes, everyone is shown the group's final selected ideas for
@@ -302,7 +335,7 @@ export default function GroupPhase() {
   const nextAfterGroup = getNextPhase('group', session?.phaseConfig)
 
   // ── Derive voting data from members ──────────────────
-  const myVotes = (members.find(m => m.id === user?.uid)?.votedFor) || []
+  const myVotes = ownVotes
   const myVoteCount = myVotes.length
 
   // Votes needed before "Submit Votes" unlocks. Normally MAX_VOTES, but capped
@@ -347,18 +380,15 @@ export default function GroupPhase() {
         // stop showing its loading state either way.
         setParticipantLoaded(true)
         if (!snap.exists()) return
-        // `estimate` fills a still-pending serverTimestamp with a local value.
-        // Read as 'none' (the default) it comes back NULL, so for one round-trip
-        // after pressing Start or Proceed the new stage had no anchor: the page
-        // fell back to the previous stage's clock, which had just expired and
-        // therefore read 0:00 on a screen the participant had just entered.
-        const data = snap.data({ serverTimestamps: 'estimate' })
+        // Wait for committed server timestamps before arming the synchronized timer.
+        const data = snap.data()
         setGroupId(data.groupId)
         // Two-way. A rejected submit is rolled back by the SDK, and with a
         // one-way latch the UI kept its green "Votes submitted" badge and its
         // hidden Submit button — the ballot was never recorded, and because the
         // group's advance waits for every member, the whole group froze.
         setVotesLocked(!!data.votesSubmitted)
+        setOwnVotes(data.votedFor || [])
         setGroupStartedAt(data.groupStartedAt || null)
         setGroupVotingStartedAt(data.groupVotingStartedAt || null)
         // Timing: record when this participant first entered the group phase
@@ -489,17 +519,7 @@ export default function GroupPhase() {
   }, [sessionId, groupId])
 
   // ── Listen to group members ─────────────────────────
-  useEffect(() => {
-    if (!sessionId || !groupId) return
-    const q = query(
-      collection(db, 'sessions', sessionId, 'participants'),
-      where('groupId', '==', groupId)
-    )
-    const unsub = onSnapshot(q, snap => {
-      setMembers(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-    })
-    return unsub
-  }, [sessionId, groupId])
+
 
   // ── Listen to this group's ideas ────────────────────
   // SCOPED, and keyed on a stable member string. This used to subscribe to the
@@ -653,12 +673,13 @@ export default function GroupPhase() {
   // so the double-click the hint still endorses is exactly one toggle.
   const lastToggleRef = useRef({ id: null, at: 0 })
   const toggleVote = useCallback(async (ideaId) => {
-    if (!isVoting || votesLocked || !sessionId || !user) return
+    if (!isVoting || votesLocked || ballotBusy.current || !sessionId || !user) return
     const now = Date.now()
     if (lastToggleRef.current.id === ideaId && now - lastToggleRef.current.at < 400) return
     lastToggleRef.current = { id: ideaId, at: now }
     const isVoted = myVotes.includes(ideaId)
     if (!isVoted && myVotes.length >= MAX_VOTES) return
+    ballotBusy.current = true; setVotePending(true); setVoteError('')
     try {
       await updateDoc(
         doc(db, 'sessions', sessionId, 'participants', user.uid),
@@ -666,7 +687,8 @@ export default function GroupPhase() {
       )
     } catch (err) {
       console.error('Vote toggle error:', err)
-    }
+      setVoteError('Your vote was not saved. Check your connection and tap Vote again.')
+    } finally { ballotBusy.current = false; setVotePending(false) }
   }, [isVoting, votesLocked, sessionId, user, myVotes])
 
   // ── Switch sub-phase and share it with the group ────
@@ -680,7 +702,11 @@ export default function GroupPhase() {
     // voting countdown has its own anchor.
     if (stage === 'voting' && !groupVotingStartedAt) updates.groupVotingStartedAt = serverTimestamp()
     updateDoc(doc(db, 'sessions', sessionId, 'participants', user.uid), updates)
-      .catch(err => console.warn('Could not save stage:', err.message))
+      .catch(err => {
+        const previous = stage === 'voting' ? 'ideation' : 'voting'
+        setSubPhase(previous); subPhaseRef.current = previous
+        setVoteError('Could not save the stage change. Check your connection and try again.')
+      })
   }
 
   // Ideation time is up (split timers only): move the group on to voting
@@ -693,7 +719,7 @@ export default function GroupPhase() {
 
   // ── Submit / lock votes ─────────────────────────────
   async function submitVotes(force = false) {
-    if (myVoteCount < requiredVotes || votesLocked || !sessionId || !user) return
+    if (ballotBusy.current || myVoteCount < requiredVotes || votesLocked || !sessionId || !user) return
     // Re-show the consensus reminder if the group's votes are diverging — unless
     // the participant chose to submit anyway from that reminder.
     if (!force && consensusMeasurable && !consensusReached) {
@@ -727,7 +753,7 @@ export default function GroupPhase() {
   // can never stall on one member; the onParticipantUpdated trigger then
   // tallies and advances the group once everyone is locked.
   const autoSubmitVotes = useCallback(async () => {
-    if (votesLocked || !sessionId || !user) return
+    if (ballotBusy.current || votesLocked || !sessionId || !user) return
     setSubPhase('voting')
     try {
       await updateDoc(
@@ -752,8 +778,9 @@ export default function GroupPhase() {
       setVotesLocked(true)
     } catch (err) {
       console.error('Auto-submit votes error:', err)
+      setVoteError('Automatic submission failed. Please check your connection and submit again.')
     }
-  }, [votesLocked, sessionId, user, groupVotingStartedAt])
+  }, [votesLocked, sessionId, user, groupVotingStartedAt, requiredVotes])
 
   // ── Which countdown is live right now ───────────────
   // Split sessions run two clocks: the ideation clock until the group moves on
@@ -801,7 +828,7 @@ export default function GroupPhase() {
         description: d,
         text: `${t}: ${d}`,
         authorId: user.uid,
-        authorName: user.displayName || user.email,
+        authorName: (memberLabels[user.uid] || 'Participant').toUpperCase(),
         phase: 'group',
         groupId,
         votes: 0,
@@ -811,6 +838,7 @@ export default function GroupPhase() {
       setNewDesc('')
     } catch (err) {
       console.error(err)
+      setVoteError('Your idea could not be saved. Your text is still here. Please try again.')
     } finally {
       setSubmitting(false)
     }
@@ -856,7 +884,7 @@ export default function GroupPhase() {
   const sortedGroup = [...(ideas.group || [])].sort(isVoting ? sortByVotes : sortByTime)
 
   // For voting mode: merge all ideas into one list sorted by votes
-  const allIdeasForVoting = [...(ideas.individual || []), ...(ideas.group || [])].sort(sortByVotes)
+  const allIdeasForVoting = [...(ideas.individual || []), ...(ideas.group || [])].sort(sortByTime)
 
   // ── The group's result, shown to everyone once the whole group has voted ──
   // `groupVotingDone` is the same condition the self-advance effect uses. The
@@ -873,7 +901,7 @@ export default function GroupPhase() {
   // least one vote, taken from `allIdeasForVoting`'s OWN order so the "#1/#2/#3"
   // marks can never disagree with the order on screen (topVotedIds sorts by count
   // alone and breaks ties by object order, which is not what is rendered).
-  const leadingIds = allIdeasForVoting
+  const leadingIds = [...allIdeasForVoting].sort(sortByVotes)
     .filter(i => (voteCounts[i.id] || 0) > 0)
     .slice(0, MAX_VOTES)
     .map(i => i.id)
@@ -882,7 +910,7 @@ export default function GroupPhase() {
   /** Renders one idea pill card (uses the stable module-scope IdeaPill) */
   function renderPill(idea, variant, showTag = false) {
     const votedByMe = myVotes.includes(idea.id)
-    const canVote = !votesLocked && (votedByMe || myVoteCount < MAX_VOTES)
+    const canVote = !votePending && !votesLocked && (votedByMe || myVoteCount < MAX_VOTES)
     const rank = leadingIds.indexOf(idea.id)
     return (
       <IdeaPill
@@ -896,6 +924,9 @@ export default function GroupPhase() {
         voteCount={voteCounts[idea.id] || 0}
         votedByMe={votedByMe}
         canVote={canVote}
+        onEdit={(id, title, description) => updateDoc(doc(db, 'sessions', sessionId, 'ideas', id), {
+          title, description, text: `${title}: ${description}`, updatedAt: serverTimestamp(),
+        })}
         onVote={toggleVote}
         showPhaseTag={showTag}
         rank={rank + 1}
@@ -1135,7 +1166,10 @@ export default function GroupPhase() {
       updateDoc(
         doc(db, 'sessions', sessionId, 'participants', user.uid),
         updates
-      ).catch(err => console.warn('Could not start group phase:', err.message))
+      ).catch(err => {
+        setStarted(false)
+        setVoteError('Could not start your timer. Check your connection and press Start again.')
+      })
     }
   }
 
@@ -1217,6 +1251,7 @@ export default function GroupPhase() {
         <div className={styles.instrContainer}>
           <NudgeBanner sessionId={sessionId} autoMessage={autoNudgeMessage} />
           <div className={styles.instrCard}>
+            {voteError && <p role="alert">{voteError}</p>}
             <div className={styles.instrBody}>
               <RichText html={c.instructions} vars={contentVars} aiOn={!!aiEnabled} />
             </div>
@@ -1306,7 +1341,7 @@ export default function GroupPhase() {
               <button
                 className={styles.proceedBtn}
                 onClick={() => submitVotes()}
-                disabled={myVoteCount < requiredVotes}
+                disabled={votePending || myVoteCount < requiredVotes}
               >
                 Submit Votes
               </button>
@@ -1317,8 +1352,15 @@ export default function GroupPhase() {
 
         <NudgeBanner sessionId={sessionId} autoMessage={autoNudgeMessage} />
 
+        {voteError && <p role="alert">{voteError}</p>}
+        {votePending && <p role="status">Saving your vote...</p>}
         {taskBrief}
 
+        {votesLocked && <p role="status">
+          Your votes are saved. You are in a group of {members.length} members, including you.
+          {' '}{members.filter(m => m.id !== user.uid && !m.votesSubmitted).length} other group members still need to submit their votes.
+          Your group's selected ideas and the next stage open automatically when all ballots are in. You are only waiting for your own group.
+        </p>}
         {!votesLocked && (
           <div className={styles.votingHint}>
             Tap <strong>Vote</strong> on an idea (or double-click it). Choose {requiredVotes} idea{requiredVotes === 1 ? '' : 's'} to represent your group.
@@ -1419,6 +1461,7 @@ export default function GroupPhase() {
 
       <NudgeBanner sessionId={sessionId} autoMessage={autoNudgeMessage} />
 
+      {voteError && <p role="alert">{voteError}</p>}
       {taskBrief}
 
       {individualActive ? (

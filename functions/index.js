@@ -9,6 +9,10 @@ const grouping = require('./grouping')
 const ai = require('./ai')
 const users = require('./users')
 
+const participantPublic = require('./participantPublic')
+exports.syncParticipantPublic = participantPublic.syncParticipantPublic
+exports.ensureGroupRoster = participantPublic.ensureGroupRoster
+exports.serverClock = participantPublic.serverClock
 exports.joinSession = session.joinSession
 exports.advancePhase = session.advancePhase
 exports.removeParticipant = session.removeParticipant

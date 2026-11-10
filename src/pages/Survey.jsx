@@ -6,6 +6,7 @@ import { useSession, useSessionEnded } from '../context/SessionContext'
 import { getContent } from '../data/defaultContent'
 import { getSurveyQuestions } from '../data/formDefaults'
 import { isPreview } from '../utils/preview'
+import GroupResults from '../components/GroupResults'
 import RichText from '../components/RichText'
 import HeaderControls from '../components/HeaderControls'
 import styles from './Survey.module.css'
@@ -27,6 +28,7 @@ export default function Survey() {
   useEffect(() => {
     try { sessionStorage.setItem(draftKey, JSON.stringify(answers)) } catch (e) { /* best effort */ }
   }, [draftKey, answers])
+  const [groupId, setGroupId] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [submitError, setSubmitError] = useState('')
@@ -39,6 +41,7 @@ export default function Survey() {
       snap => {
         if (!snap.exists()) return
         const data = snap.data()
+        setGroupId(data.groupId || null)
         // Timing: record when this participant reached the survey, once.
         // surveyCompletedAt − surveyOpenedAt = how long the survey took.
         if (!data.timing?.surveyOpenedAt && !surveyOpenedWrittenRef.current) {
@@ -183,6 +186,7 @@ export default function Survey() {
           </p>
         )}
 
+        {session?.phaseConfig?.groupPhaseActive !== false && <GroupResults sessionId={sessionId} groupId={groupId} />}
         <form onSubmit={submitSurvey} className={styles.form}>
           {sections.map((sec, si) => (
             <div key={si} className={styles.sectionCard}>

@@ -36,6 +36,11 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/sessions/$(sessionId)/participants/$(request.auth.uid)).data.get('groupId', '');
     }
 
+    function anonymousAuthor() {
+      return request.resource.data.get('authorName', 'Participant') is string
+        && request.resource.data.get('authorName', 'Participant').matches('(?i)(p[0-9]+|Participant|You)');
+    }
+
     // ── Global Settings ───────────────────────────────────────────────────
     // Admin-only: settings/ai holds provider API keys. Participants never
     // read settings client-side; Cloud Functions use the Admin SDK (which
@@ -69,15 +74,12 @@ service cloud.firestore {
       // ── Participants ──────────────────────────────────────────────────────
 
       match /participants/{participantId} {
-        // Own doc, own group, or the instructor. The participant doc holds real
+        // Only the owner or instructor. The participant doc holds real
         // name, e-mail, platform student id, demographics and surveyAnswers, and
         // the old rule let ANY participant of the session read all of them.
-        allow read: if isSessionInstructor(sessionId)
-          || isOwner(participantId)
-          || (isSessionParticipant(sessionId)
-              && resource.data.get('groupId', '') != ''
-              && resource.data.get('groupId', '') == myGroup(sessionId));
-        allow create: if isSignedIn() && isOwner(participantId);
+        allow read: if isSessionInstructor(sessionId) || isOwner(participantId);
+        // Registration/group assignment is exclusively server-side.
+        allow create: if false;
         // A participant may edit their own doc, but not the fields that decide
         // who they are or how their ballot counts: `groupId` is what the server
         // tally queries on, and `votedFor` was unbounded, so one devtools line
@@ -88,8 +90,19 @@ service cloud.firestore {
               && request.resource.data.get('groupId', '') == resource.data.get('groupId', '')
               && request.resource.data.get('anonymousLabel', '') == resource.data.get('anonymousLabel', '')
               && request.resource.data.get('removed', false) == resource.data.get('removed', false)
-              && request.resource.data.get('votedFor', []).size() <= 3);
+              && request.resource.data.get('votedFor', []) is list
+              && request.resource.data.get('votedFor', []).size() <= 3
+              && request.resource.data.get('votedFor', []).toSet().size() == request.resource.data.get('votedFor', []).size()
+              && (!resource.data.get('votesSubmitted', false)
+                  || (request.resource.data.get('votesSubmitted', false)
+                      && request.resource.data.get('votedFor', []) == resource.data.get('votedFor', []))));
         allow delete: if false;
+      }
+
+      match /participantPublic/{participantId} {
+        allow read: if isSessionInstructor(sessionId) || isOwner(participantId)
+          || (resource.data.groupId != '' && resource.data.groupId == myGroup(sessionId));
+        allow write: if false;
       }
 
       // ── Groups ────────────────────────────────────────────────────────────
@@ -116,12 +129,15 @@ service cloud.firestore {
         // An idea may only be filed against the author's own group (or no group,
         // which is how an individual-phase idea is written). Without this a
         // participant could inject an idea straight into another group's ballot.
-        allow create: if isSessionParticipant(sessionId)
+        allow create: if isSessionParticipant(sessionId) && anonymousAuthor()
           && request.resource.data.authorId == request.auth.uid
           && (request.resource.data.get('groupId', null) == null
               || request.resource.data.get('groupId', '') == myGroup(sessionId));
         // Authors can edit their own ideas (title, description, selected flag).
-        allow update: if request.auth.uid == resource.data.authorId;
+        allow update: if request.auth.uid == resource.data.authorId
+          && request.resource.data.authorId == resource.data.authorId
+          && request.resource.data.get('groupId', null) == resource.data.get('groupId', null)
+          && request.resource.data.phase == resource.data.phase;
         allow delete: if request.auth.uid == resource.data.authorId;
       }
 
@@ -134,7 +150,8 @@ service cloud.firestore {
         allow read: if isSessionInstructor(sessionId)
           || resource.data.get('scopeId', '') == request.auth.uid
           || resource.data.get('scopeId', '') == myGroup(sessionId);
-        allow create: if isSessionParticipant(sessionId)
+        allow create: if isSessionParticipant(sessionId) && anonymousAuthor()
+          && request.resource.data.scope in ['individual', 'group']
           && request.resource.data.role == 'user'
           && request.resource.data.authorId == request.auth.uid
           && (request.resource.data.get('scopeId', '') == request.auth.uid

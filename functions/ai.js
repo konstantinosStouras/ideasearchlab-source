@@ -292,7 +292,7 @@ exports.sendAIMessage = functions.https.onCall(async (data, context) => {
   if (!context.auth) throw new HttpsError('unauthenticated', 'Must be logged in.')
 
   const { sessionId, scope, scopeId, userMessage } = data
-  if (!sessionId || !scope || !scopeId || !userMessage) {
+  if (!sessionId || !['individual', 'group'].includes(scope) || !scopeId || typeof userMessage !== 'string' || !userMessage.trim()) {
     throw new HttpsError('invalid-argument', 'Missing required fields.')
   }
 

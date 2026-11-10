@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   collection, addDoc, onSnapshot, orderBy, query, where, serverTimestamp,
-  httpsCallable, db, functions
+  httpsCallable, doc, db, functions
 } from '../utils/db'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -37,6 +37,18 @@ function renderMarkdown(text) {
 export default function AIChat({ sessionId, scope, scopeId, aiConfig }) {
   const { user } = useAuth()
   const [messages, setMessages] = useState([])
+  const [labels, setLabels] = useState({})
+  useEffect(() => {
+    setMessages([])
+    setLabels({})
+    if (scope !== 'group' || !sessionId || !scopeId) return
+    return onSnapshot(doc(db, 'sessions', sessionId, 'groups', scopeId), snap => {
+      setLabels(snap.data()?.memberLabels || {})
+    }, () => setAiError('Could not load participant labels. Please reconnect.'))
+  }, [sessionId, scope, scopeId])
+  const authorLabel = uid => scope === 'group'
+    ? (/^p\d+$/i.test(labels[uid] || '') ? labels[uid].toUpperCase() : 'Participant')
+    : 'You'
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [aiError, setAiError] = useState('')
@@ -47,6 +59,7 @@ export default function AIChat({ sessionId, scope, scopeId, aiConfig }) {
   // new messages (or snapshot re-fires) never yank them back down mid-read.
   const stickRef = useRef(true)
   const inputRef = useRef(null)
+  const postedRef = useRef(null)
 
   const chatPath = `sessions/${sessionId}/aiMessages`
 
@@ -68,7 +81,7 @@ export default function AIChat({ sessionId, scope, scopeId, aiConfig }) {
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(m => m.scopeId === scopeId && m.scope === scope)
       setMessages(msgs)
-    })
+    }, () => setAiError('Could not load the conversation. Please check your connection.'))
     return unsub
   }, [sessionId, scopeId, scope])
 
@@ -112,16 +125,19 @@ export default function AIChat({ sessionId, scope, scopeId, aiConfig }) {
 
     try {
       // Optimistically add user message to Firestore
+      if (postedRef.current !== `${scope}:${scopeId}:${text}`) {
       await addDoc(collection(db, chatPath), {
         role: 'user',
         text,
         scope,
         scopeId,
         authorId: user.uid,
-        authorName: user.displayName || user.email,
+        authorName: authorLabel(user.uid),
         timestamp: serverTimestamp(),
       })
 
+      postedRef.current = `${scope}:${scopeId}:${text}`
+      }
       // Call Cloud Function to get AI response
       const sendAIMessage = httpsCallable(functions, 'sendAIMessage')
       await sendAIMessage({
@@ -130,6 +146,7 @@ export default function AIChat({ sessionId, scope, scopeId, aiConfig }) {
         scopeId,
         userMessage: text,
       })
+      postedRef.current = null
     } catch (err) {
       // Do not destroy what they typed. The box is cleared optimistically, so a
       // failed call (expired provider key, provider 5xx, a callable timeout) used
@@ -202,7 +219,7 @@ export default function AIChat({ sessionId, scope, scopeId, aiConfig }) {
               <span className={styles.aiLabel}>AI</span>
             )}
             {msg.role === 'user' && (
-              <span className={styles.userLabel}>{msg.authorName?.split(' ')[0] || 'You'}</span>
+              <span className={styles.userLabel}>{authorLabel(msg.authorId)}</span>
             )}
             {msg.role === 'assistant' ? (
               <div
@@ -227,6 +244,7 @@ export default function AIChat({ sessionId, scope, scopeId, aiConfig }) {
         )}
       </div>
 
+      {aiError && <p role="alert">{aiError}</p>}
       <form className={styles.inputRow} onSubmit={sendMessage}>
         <div className={styles.inputWrap}>
           {/* Drag this top handle to resize the input (taller when dragged up) */}

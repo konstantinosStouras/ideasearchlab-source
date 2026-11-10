@@ -194,6 +194,14 @@ export function writeBatch() {
 function afterWrite(path, data) {
   const m = /^sessions\/([^/]+)\/participants\/([^/]+)$/.exec(path)
   if (!m || !data) return
+  const { groupId = '', anonymousLabel = '', status = 'waiting', individualComplete = false,
+    votedFor = [], votesSubmitted = false, groupStage = '' } = data
+  store.set(`sessions/${m[1]}/participantPublic/${m[2]}`, { groupId, anonymousLabel, status, individualComplete, votedFor, votesSubmitted, groupStage })
+  if (data.votesSubmitted && data.groupId) {
+    const groupPath = `sessions/${m[1]}/groups/${data.groupId}`
+    const group = store.get(groupPath)
+    if (group) store.set(groupPath, { ...group, status: 'done', finalIdeas: data.votedFor || [] })
+  }
   if (data.status === 'waiting_for_group') {
     const sid = m[1]
     const sess = store.get('sessions/' + sid) || {}
@@ -212,6 +220,12 @@ function afterWrite(path, data) {
 export function getFunctions() { return PREVIEW_FUNCTIONS }
 export function httpsCallable(_functions, name) {
   return async (payload) => {
+    if (name === 'serverClock') return { data: { now: Date.now() } }
+    if (name === 'ensureGroupRoster') {
+      collDocs(`sessions/${payload.sessionId}/participants`).forEach(d => afterWrite(d.path, d.data))
+      notify()
+      return { data: { ok: true } }
+    }
     if (name === 'joinSession') return emJoinSession()
     if (name === 'sendAIMessage') return emSendAIMessage(payload)
     // advancePhase / handleStragglers / removeParticipant etc. aren't reachable

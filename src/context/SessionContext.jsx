@@ -14,6 +14,7 @@ export function SessionProvider({ sessionId, children }) {
     const unsub = onSnapshot(
       doc(db, 'sessions', sessionId),
       (snap) => {
+        setError(null)
         if (snap.exists()) {
           setSession({ id: snap.id, ...snap.data() })
         } else {

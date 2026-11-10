@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { serverNow, syncServerClock } from '../utils/serverClock'
 import styles from './PhaseTimer.module.css'
 
 /**
@@ -19,6 +20,25 @@ import styles from './PhaseTimer.module.css'
 export default function PhaseTimer({ phaseStartedAt, durationSeconds, onExpire, onTick, preview = false }) {
   const [remaining, setRemaining] = useState(null)
   const onTickRef = useRef(onTick)
+  const onExpireRef = useRef(onExpire)
+  useEffect(() => { onExpireRef.current = onExpire }, [onExpire])
+  const [clockReady, setClockReady] = useState(serverNow() !== null)
+  useEffect(() => {
+    if (preview || !phaseStartedAt || !durationSeconds) return
+    let active = true
+    const sync = () => syncServerClock().then(() => { if (active) setClockReady(true) }).catch(() => {})
+    sync()
+    const id = setInterval(sync, 30000)
+    window.addEventListener('pageshow', sync)
+    window.addEventListener('focus', sync)
+    document.addEventListener('visibilitychange', sync)
+    return () => {
+      active = false; clearInterval(id)
+      window.removeEventListener('pageshow', sync)
+      window.removeEventListener('focus', sync)
+      document.removeEventListener('visibilitychange', sync)
+    }
+  }, [preview, !!phaseStartedAt, durationSeconds])
   useEffect(() => { onTickRef.current = onTick }, [onTick])
 
   useEffect(() => {
@@ -27,7 +47,7 @@ export default function PhaseTimer({ phaseStartedAt, durationSeconds, onExpire, 
       setRemaining(durationSeconds || null)
       return
     }
-    if (!phaseStartedAt || !durationSeconds) {
+    if (!phaseStartedAt || !durationSeconds || !clockReady) {
       setRemaining(null)
       return
     }
@@ -38,10 +58,11 @@ export default function PhaseTimer({ phaseStartedAt, durationSeconds, onExpire, 
       // Clamped at BOTH ends: a device clock running slow made `left` exceed the
       // duration, and the SVG ring's dasharray then went negative (invalid, so
       // the ring silently disappeared).
-      const left = Math.max(0, Math.min(durationSeconds, Math.round((endMs - Date.now()) / 1000)))
+      const left = Math.max(0, Math.min(durationSeconds, Math.ceil((endMs - serverNow()) / 1000)))
+      if (!Number.isFinite(left)) return
       setRemaining(left)
       if (onTickRef.current) onTickRef.current(left)
-      if (left === 0 && onExpire) onExpire()
+      if (left === 0 && onExpireRef.current) onExpireRef.current()
     }
 
     tick()
@@ -56,8 +77,9 @@ export default function PhaseTimer({ phaseStartedAt, durationSeconds, onExpire, 
       document.removeEventListener('visibilitychange', tick)
       window.removeEventListener('focus', tick)
     }
-  }, [phaseStartedAt, durationSeconds, onExpire])
+  }, [phaseStartedAt, durationSeconds, preview, clockReady])
 
+  if (!preview && phaseStartedAt && durationSeconds && !clockReady) return <span role="status">Synchronizing timer...</span>
   if (remaining === null) return null
 
   const mins = Math.floor(remaining / 60)

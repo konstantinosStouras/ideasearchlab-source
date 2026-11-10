@@ -7,9 +7,10 @@
    satisfiable under the tightened rules. Not a substitute for the emulator, but
    it catches an unscoped query that the new rules would deny. */
 import { readFileSync, readdirSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
-const ROOT = new URL('../src/', import.meta.url).pathname
+const ROOT = fileURLToPath(new URL('../src/', import.meta.url))
 const files = []
 ;(function walk(d) {
   for (const e of readdirSync(d, { withFileTypes: true })) {
@@ -31,7 +32,7 @@ for (const f of files) {
     const coll = m[3]
     const tail = (m[4] || '') + (m[5] || '')
     const scoped = /where\(/.test(tail)
-    if (['participants', 'ideas', 'aiMessages'].includes(coll) && !scoped) {
+    if (['participants', 'participantPublic', 'ideas', 'aiMessages'].includes(coll) && !scoped) {
       console.log(`  UNSCOPED  ${f}: ${coll} read with no where()`)
       bad++
     }

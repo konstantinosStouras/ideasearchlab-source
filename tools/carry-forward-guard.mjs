@@ -33,7 +33,7 @@
    The Cloud Function half is RUN by tools/carry-forward-server-guard.mjs.
    ========================================================================== */
 import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 
@@ -50,7 +50,7 @@ const check = (name, cond, detail) => {
   console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ''}`)
 }
 
-const esm = await import(join(SRC, 'src', 'utils', 'carryForward.js'))
+const esm = await import(pathToFileURL(join(SRC, 'src', 'utils', 'carryForward.js')).href)
 const cjs = require(join(SRC, 'functions', 'carryForward.js'))
 const { topUpSelection, pickStable, carryTarget, carriedBy, isOwnPick, isLegacySubmission, selectionPatch, patchChanges, carriedSummary, SELECTED_BY, COMPUTER_SELECTED_LABEL, CARRY_FORWARD_RULE } = esm
 
@@ -346,9 +346,9 @@ console.log('\n8. the consumers (by source)')
 /* ── 9. the shipped bundle ─────────────────────────────────────────────── */
 console.log('\n9. the shipped bundle (lab/ideasearchlab) was built from THIS module')
 {
-  const html = read(join(SITE, 'lab', 'ideasearchlab', 'index.html'))
+  const html = read(join(SITE, 'lab-ideasearchlab', 'index.html'))
   const m = html.match(/assets\/(index-[^"']+\.js)/)
-  const bundle = m && join(SITE, 'lab', 'ideasearchlab', 'assets', m[1])
+  const bundle = m && join(SITE, 'lab-ideasearchlab', 'assets', m[1])
   check('index.html names a bundle', !!bundle, html.slice(0, 200))
   if (bundle) {
     const js = existsSync(bundle) ? read(bundle) : ''
@@ -363,7 +363,7 @@ console.log('\n9. the shipped bundle (lab/ideasearchlab) was built from THIS mod
 /* ── 10. the analytics rows round-trip ─────────────────────────────────── */
 console.log('\n10. analytics rows: what the builder says is what the importer reads back')
 {
-  const { buildRowsForSession, normalizeImportedRows } = await import(join(SRC, 'src', 'utils', 'analyticsData.js'))
+  const { buildRowsForSession, normalizeImportedRows } = await import(pathToFileURL(join(SRC, 'src', 'utils', 'analyticsData.js')).href)
   const session = { id: 's1', code: 'S1', name: 'test', phaseConfig: { individualPhaseActive: true, groupPhaseActive: true, phaseOrder: 'individual_first' }, aiConfig: {} }
   const ideas = [
     { id: 'i1', authorId: 'u1', phase: 'individual', title: 'own', description: 'd', selected: true, selectedBy: 'participant' },
