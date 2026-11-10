@@ -200,7 +200,12 @@ function afterWrite(path, data) {
   if (data.votesSubmitted && data.groupId) {
     const groupPath = `sessions/${m[1]}/groups/${data.groupId}`
     const group = store.get(groupPath)
-    if (group) store.set(groupPath, { ...group, status: 'done', finalIdeas: data.votedFor || [] })
+    const members = (group?.members || []).map(uid => store.get(`sessions/${m[1]}/participants/${uid}`))
+    if (members.length && members.every(p => p?.votesSubmitted)) {
+      const counts = {}
+      members.forEach(p => (p.votedFor || []).forEach(id => { counts[id] = (counts[id] || 0) + 1 }))
+      store.set(groupPath, { ...group, status: 'done', finalIdeas: Object.keys(counts).sort((a,b) => counts[b] - counts[a]).slice(0, 3) })
+    }
   }
   if (data.status === 'waiting_for_group') {
     const sid = m[1]
@@ -313,6 +318,8 @@ if (isPreview()) ensurePreviewSeed()
 if (isPreview() && typeof window !== 'undefined') {
   window.__islPreview = {
     docs: collPath => collDocs(collPath).map(r => ({ id: r.id, ...r.data })),
+    setGroup: patch => updateDoc(doc(PREVIEW_DB, 'sessions', PREVIEW_SESSION_ID, 'groups', 'g0'), patch),
+    setMember: (uid, patch) => setDoc(doc(PREVIEW_DB, 'sessions', PREVIEW_SESSION_ID, 'participants', uid), patch),
     setParticipant: patch => updateDoc(doc(PREVIEW_DB, 'sessions', PREVIEW_SESSION_ID, 'participants', PREVIEW_UID), patch),
     setIdea: (id, patch) => updateDoc(doc(PREVIEW_DB, 'sessions', PREVIEW_SESSION_ID, 'ideas', id), patch),
   }

@@ -43,9 +43,15 @@ for (const [name,engine,opts,context] of [
  for(let i=0;i<3;i++){await p.getByRole('button',{name:'Vote',exact:true}).first().click(); await p.waitForTimeout(100);}
  assert.deepEqual(await headings(),before,'Voting reordered cards');
  const ballot=await p.evaluate(()=>window.__islPreview.docs('sessions/PREVIEW/participants')[0].votedFor);assert.equal(ballot.length,3);
- await p.getByRole('button',{name:'Submit Votes',exact:true}).click();await p.waitForURL('**/survey');await p.getByRole('heading',{name:"Your group's selected ideas"}).waitFor();assert.equal(errors.length,0,errors.join('\n'));
+ await p.evaluate(()=>window.__islPreview.setGroup({members:['preview-user','peer'],memberLabels:{'preview-user':'p1',peer:'p2'}}));
+ await p.getByRole('button',{name:'Submit Votes',exact:true}).click();
+ await p.waitForTimeout(350);assert.ok(p.url().endsWith('/group'),'Partial roster prematurely advanced');
+ await p.evaluate(()=>window.__islPreview.setMember('peer',{groupId:'g0',anonymousLabel:'p2',status:'group',votedFor:[],votesSubmitted:false}));
+ await p.waitForTimeout(350);assert.ok(p.url().endsWith('/group'),'Unsubmitted peer prematurely advanced');
+ await p.evaluate(()=>window.__islPreview.setMember('peer',{groupId:'g0',anonymousLabel:'p2',status:'group',votedFor:[],votesSubmitted:true}));
+ await p.waitForURL('**/survey');await p.getByRole('heading',{name:"Your group's selected ideas"}).waitFor();assert.equal(errors.length,0,errors.join('\n'));
  await p.screenshot({path:`C:/Users/LENOVO/Dropbox/Others/GitHub/lab-ideasearchlab/outputs/${name}-fixed.png`});
- results.push({name,passed:true,checks:['one-hour clock skew and resume','create 3 ideas','edit and persist','anonymous AI label','dismiss mobile modal','single tap votes','stable card order','submit and result']});console.log(name,'PASS');
+ results.push({name,passed:true,checks:['partial roster and unsubmitted peer do not advance','one-hour clock skew and resume','create 3 ideas','edit and persist','anonymous AI label','dismiss mobile modal','single tap votes','stable card order','submit and result']});console.log(name,'PASS');
  }catch(e){results.push({name,passed:false,error:e.stack});console.error(name,e.message)}finally{await browser?.close()}
 }
 }finally{srv.close();await writeFile('C:/Users/LENOVO/Dropbox/Others/GitHub/lab-ideasearchlab/outputs/simulation-browser-results.json',JSON.stringify(results,null,2));}
