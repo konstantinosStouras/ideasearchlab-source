@@ -1,4 +1,5 @@
 const functions = require('firebase-functions/v1').region('europe-west1')
+const { HttpsError } = require('firebase-functions/v1').https
 const admin = require('firebase-admin')
 const db = admin.firestore()
 // Explicit allow-list: never copy identity, demographics, consent or answers.
@@ -26,16 +27,16 @@ exports.syncParticipantPublic = functions.firestore
   .onWrite((change) => syncParticipant(change.after.ref))
 // Backfills existing groups on entry without exposing private source documents.
 exports.ensureGroupRoster = functions.https.onCall(async ({ sessionId }, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in first.')
-  if (typeof sessionId !== 'string' || !sessionId || sessionId.includes('/')) throw new functions.https.HttpsError('invalid-argument', 'Invalid session.')
+  if (!context.auth) throw new HttpsError('unauthenticated', 'Sign in first.')
+  if (typeof sessionId !== 'string' || !sessionId || sessionId.includes('/')) throw new HttpsError('invalid-argument', 'Invalid session.')
   const session = db.collection('sessions').doc(sessionId)
   const me = await session.collection('participants').doc(context.auth.uid).get()
-  if (!me.exists || !me.data().groupId) throw new functions.https.HttpsError('permission-denied', 'No group membership.')
+  if (!me.exists || !me.data().groupId) throw new HttpsError('permission-denied', 'No group membership.')
   const group = await session.collection('groups').doc(me.data().groupId).get()
   await Promise.all((group.data()?.members || []).map(uid => syncParticipant(session.collection('participants').doc(uid))))
   return { ok: true }
 })
 exports.serverClock = functions.https.onCall((data, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in first.')
+  if (!context.auth) throw new HttpsError('unauthenticated', 'Sign in first.')
   return { now: Date.now() }
 })
