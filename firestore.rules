@@ -125,7 +125,12 @@ service cloud.firestore {
       // ── Ideas ─────────────────────────────────────────────────────────────
 
       match /ideas/{ideaId} {
-        allow read: if isSessionMember(sessionId);
+        allow read: if isSessionInstructor(sessionId)
+          || resource.data.authorId == request.auth.uid
+          || (isSessionParticipant(sessionId) && myGroup(sessionId) != ''
+              && get(/databases/$(database)/documents/sessions/$(sessionId)/participants/$(request.auth.uid)).data.get('status', '') in ['group', 'voting', 'survey', 'done']
+              && (resource.data.get('groupId', '') == myGroup(sessionId)
+                  || resource.data.authorId in get(/databases/$(database)/documents/sessions/$(sessionId)/groups/$(myGroup(sessionId))).data.members));
         // An idea may only be filed against the author's own group (or no group,
         // which is how an individual-phase idea is written). Without this a
         // participant could inject an idea straight into another group's ballot.
