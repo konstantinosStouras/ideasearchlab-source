@@ -125,6 +125,10 @@ function createGroupLifecycle({ db, stamp, HttpsError, getPhaseSequence }) {
   }
 
   async function maybeAdvanceSession(sessionRef, statusHint) {
+    // A waiting participant already prevents an aggregate phase advance.
+    // Avoid taking read locks on the whole classroom in this common case.
+    const waiting = await sessionRef.collection('participants').where('status', '==', 'waiting').limit(1).get()
+    if (waiting.docs.some(snap => active(snap.data()))) return
     return db.runTransaction(async tx => {
       const ss = await tx.get(sessionRef)
       if (!ss.exists || ss.data().status === 'done') return
