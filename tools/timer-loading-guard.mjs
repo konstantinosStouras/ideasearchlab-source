@@ -43,11 +43,12 @@ const navigate=path=>q.navigations.push(path);export const useNavigate=()=>navig
 export const getContent=()=>({individual:{instructions:'QA instructions',brief:'QA brief'},group:{instructions:'QA instructions',brief:'QA brief'}});
 export const serverNow=()=>Date.now();export const syncServerClock=async()=>{};
 export const Done=()=>null;
+export const ensureGroupProgress=async()=>{};
 export default function Stub({children,leftPanel,rightPanel,html}){return React.createElement(React.Fragment,null,children,leftPanel,rightPanel,html||null)};
 `;
 const result=await build({stdin:{contents:`import React from 'react';import {createRoot} from 'react-dom/client';import IndividualPhase from './src/pages/IndividualPhase.jsx';import GroupPhase from './src/pages/GroupPhase.jsx';const Page=new URLSearchParams(location.search).get('scenario').includes('voting')?GroupPhase:IndividualPhase;createRoot(document.getElementById('app')).render(<Page/>);`,resolveDir:root,loader:'jsx'},bundle:true,write:false,format:'iife',jsx:'automatic',plugins:[{name:'controlled-timer-transport',setup(b){
   b.onLoad({filter:/[\\/]src[\\/]pages[\\/](IndividualPhase|GroupPhase)\.jsx$/},async a=>{const name=/(IndividualPhase|GroupPhase)\.jsx$/.exec(a.path)[1];return {contents:await readFile(paths[name],'utf8'),loader:'jsx',resolveDir:resolve(root,'src/pages')}});
-  b.onResolve({filter:/^(react-router-dom|\.\.\/(utils\/(db|useGroupRoster|serverClock)|context\/(AuthContext|SessionContext)|data\/defaultContent|components\/(SplitLayout|ResizeDivider|AIChat|NudgeBanner|HeaderControls|RichText))|\.\/Survey)$/},()=>({path:'timer-qa',namespace:'qa'}));
+  b.onResolve({filter:/^(react-router-dom|\.\.\/(utils\/(db|useGroupRoster|serverClock|ensureGroupProgress)|context\/(AuthContext|SessionContext)|data\/defaultContent|components\/(SplitLayout|ResizeDivider|AIChat|NudgeBanner|HeaderControls|RichText))|\.\/Survey)$/},()=>({path:'timer-qa',namespace:'qa'}));
   b.onLoad({filter:/.*/,namespace:'qa'},()=>({contents:stub,loader:'jsx',resolveDir:root}));
   b.onLoad({filter:/\.css$/},()=>({contents:'export default new Proxy({}, {get:(_,key)=>String(key)})',loader:'js'}));
 }}]});
@@ -102,3 +103,4 @@ try {
 const report={at:new Date().toISOString(),paths,passed:checks.every(c=>c.pass),checks};
 if(arg('--report'))await writeFile(resolve(arg('--report')),JSON.stringify(report,null,2));
 console.log(JSON.stringify({passed:report.passed,checks:checks.length}));if(!report.passed)process.exitCode=1;
+

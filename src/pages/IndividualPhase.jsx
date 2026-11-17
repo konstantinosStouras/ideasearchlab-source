@@ -1,4 +1,5 @@
 import { useGroupRoster } from '../utils/useGroupRoster'
+import { ensureGroupProgress } from '../utils/ensureGroupProgress'
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
@@ -458,6 +459,7 @@ export default function IndividualPhase() {
           individualSubmittedAt: serverTimestamp(),
         }
       )
+      ensureGroupProgress(sessionId)
     } catch (err) {
       console.error('Failed to submit:', err)
       setDone(false)

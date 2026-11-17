@@ -129,6 +129,10 @@ export function buildSessionSheets(session, { participants = [], ideas = [], gro
   const sessionId = session.id
   const { aiSolo, aiGroup, sessionCode, placement, paperName, aiPresentIn } = conditionOf(session)
   const aiConditionLabel = `${placement} = ${paperName} (AI in ${aiPresentIn})`
+  const triadCount = groups.filter(group => group.members?.length === 3).length
+  const incompleteGroupCount = groups.filter(group =>
+    (group.members?.length || 0) < (group.targetSize || session.phaseConfig?.groupSize || 3)
+  ).length
 
   const finalIdeaIds = new Set(groups.flatMap(g => g.finalIdeas || []))
   const finalIdeaRank = {}
@@ -203,7 +207,9 @@ export function buildSessionSheets(session, { participants = [], ideas = [], gro
     [],
     ['THIS SESSION AT A GLANCE'],
     ['Participants', participants.length],
-    ['Groups (triads)', groups.length],
+    ['Groups (total)', groups.length],
+    ['Groups (triads)', triadCount],
+    ['Incomplete groups', incompleteGroupCount],
     ['Individual-stage ideas', nIndivIdeas],
     ['Group-stage ideas', nGroupIdeas],
     ['Carried-to-group ideas', ideas.filter(i => i.selected).length],
@@ -615,7 +621,9 @@ export function buildSessionSheets(session, { participants = [], ideas = [], gro
     'AI Solo (0/1)': aiSolo ? 1 : 0,
     'AI Group (0/1)': aiGroup ? 1 : 0,
     'Participants': participants.length,
-    'Groups (triads)': groups.length,
+    'Groups (total)': groups.length,
+    'Groups (triads)': triadCount,
+    'Incomplete groups': incompleteGroupCount,
     'Individual-stage ideas': nIndivIdeas,
     'Group-stage ideas': nGroupIdeas,
     'Carried-to-group ideas': ideas.filter(i => i.selected).length,

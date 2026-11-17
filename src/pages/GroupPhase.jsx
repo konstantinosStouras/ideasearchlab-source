@@ -1,4 +1,5 @@
 import { useGroupRoster } from '../utils/useGroupRoster'
+import { ensureGroupProgress } from '../utils/ensureGroupProgress'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
@@ -746,6 +747,7 @@ export default function GroupPhase() {
         }
       )
       setVotesLocked(true)
+      ensureGroupProgress(sessionId)
       // Advancing to the next phase is handled by the self-heal effect below
       // (fires once every member has submitted), so a participant is never left
       // frozen waiting on a single backend round-trip.
@@ -783,6 +785,7 @@ export default function GroupPhase() {
       // and no timer left to fire — and since the group's advance waits on every
       // member's `votesSubmitted`, every other member froze with it.
       setVotesLocked(true)
+      ensureGroupProgress(sessionId)
     } catch (err) {
       console.error('Auto-submit votes error:', err)
       setVoteError('Automatic submission failed. Please check your connection and submit again.')

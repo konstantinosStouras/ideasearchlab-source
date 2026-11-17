@@ -14,6 +14,7 @@ exports.syncParticipantPublic = participantPublic.syncParticipantPublic
 exports.ensureGroupRoster = participantPublic.ensureGroupRoster
 exports.serverClock = participantPublic.serverClock
 exports.joinSession = session.joinSession
+exports.ensureGroupProgress = session.ensureGroupProgress
 exports.advancePhase = session.advancePhase
 exports.removeParticipant = session.removeParticipant
 exports.deleteSessionDeep = session.deleteSessionDeep

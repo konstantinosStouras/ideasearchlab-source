@@ -231,7 +231,7 @@ export function getFunctions() { return PREVIEW_FUNCTIONS }
 export function httpsCallable(_functions, name) {
   return async (payload) => {
     if (name === 'serverClock') return { data: { now: Date.now() } }
-    if (name === 'ensureGroupRoster') {
+    if (name === 'ensureGroupRoster' || name === 'ensureGroupProgress') {
       collDocs(`sessions/${payload.sessionId}/participants`).forEach(d => afterWrite(d.path, d.data))
       notify()
       return { data: { ok: true } }

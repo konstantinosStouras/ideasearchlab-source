@@ -189,6 +189,17 @@ exports.advancePhase = functions.https.onCall(async (data, context) => {
 })
 
 exports.reconcileGroup = (sessionRef, groupId) => lifecycle.reconcileGroup(sessionRef, groupId)
+
+exports.ensureGroupProgress = functionsV1.runWith({ timeoutSeconds: 120, maxInstances: 16 }).region('europe-west1').https.onCall(async (data, context) => {
+  if (!context.auth) throw new HttpsError('unauthenticated', 'Sign in first.')
+  const sessionId = data?.sessionId
+  if (typeof sessionId !== 'string' || !sessionId || sessionId.includes('/')) throw new HttpsError('invalid-argument', 'Invalid session.')
+  const sessionRef = db.collection('sessions').doc(sessionId)
+  const participant = await sessionRef.collection('participants').doc(context.auth.uid).get()
+  if (!participant.exists || !participant.data().groupId || participant.data().removed) throw new HttpsError('permission-denied', 'No active group membership.')
+  await lifecycle.reconcileGroup(sessionRef, participant.data().groupId)
+  return { ok: true }
+})
 exports.startWaitingGroups = (sessionRef, instructorUid) => lifecycle.startWaitingGroups(sessionRef, instructorUid)
 
 
