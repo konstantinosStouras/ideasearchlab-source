@@ -11,4 +11,10 @@ for(const code of ['functions/permission-denied','functions/unauthenticated','fu
 calls=0;time=0;await assert.rejects(()=>retrySessionJoin(async()=>{calls++;throw Object.assign(new Error('Busy'),{code:'functions/unavailable'})},payload,{...opts,timeoutMs:1000}));assert.equal(time,1000);assert.equal(calls,2)
 calls=0;time=0;await assert.rejects(()=>retrySessionJoin(async()=>{calls++;throw Object.assign(new Error('Busy'),{code:'functions/internal'})},payload,{...opts,maxAttempts:3}));assert.equal(calls,3)
 calls=0;const ok=await retrySessionJoin(async()=>{calls++;return 'ok'},payload,opts);assert.equal(ok,'ok');assert.equal(calls,1)
-console.log('PASS retry: transient recovery, identical payload, bounded deadline/attempts, immediate success, five permanent errors never retried')
+calls=0;time=0
+await retrySessionJoin(async()=>{calls++;if(time<150000)throw Object.assign(new Error('Large class still joining'),{code:'functions/resource-exhausted'});return 'joined'},payload,opts)
+assert(time>=150000 && time<240000)
+calls=0;time=0
+await assert.rejects(()=>retrySessionJoin(async()=>{calls++;throw Object.assign(new Error('Still busy'),{code:'functions/resource-exhausted'})},payload,opts))
+assert.equal(time,240000)
+console.log('PASS retry: transient recovery, 500-student admission window, bounded deadline/attempts, immediate success, permanent errors never retried')

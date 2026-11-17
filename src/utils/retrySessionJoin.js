@@ -2,7 +2,7 @@
 // A classroom burst may be rejected by the platform before the callable runs.
 // Retry only transient failures, with jitter so students do not retry together.
 export async function retrySessionJoin(join, payload, options = {}) {
-  const { onRetry = () => {}, timeoutMs = 90000, maxAttempts = 12,
+  const { onRetry = () => {}, timeoutMs = 240000, maxAttempts = 40,
     now = () => performance.now(), random = Math.random,
     sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = options
   const deadline = now() + timeoutMs
