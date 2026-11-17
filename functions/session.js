@@ -197,7 +197,10 @@ exports.ensureGroupProgress = functionsV1.runWith({ timeoutSeconds: 120, maxInst
   const sessionRef = db.collection('sessions').doc(sessionId)
   const participant = await sessionRef.collection('participants').doc(context.auth.uid).get()
   if (!participant.exists || !participant.data().groupId || participant.data().removed) throw new HttpsError('permission-denied', 'No active group membership.')
-  await lifecycle.reconcileGroup(sessionRef, participant.data().groupId)
+  // Participant-change events maintain the aggregate session phase. The
+  // synchronous recovery only needs this group's transaction, so hundreds of
+  // callers do not wait on a scan of the entire classroom.
+  await lifecycle.reconcileGroup(sessionRef, participant.data().groupId, { updateSession: false })
   return { ok: true }
 })
 exports.startWaitingGroups = (sessionRef, instructorUid) => lifecycle.startWaitingGroups(sessionRef, instructorUid)

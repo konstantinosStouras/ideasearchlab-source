@@ -149,7 +149,7 @@ function createGroupLifecycle({ db, stamp, HttpsError, getPhaseSequence }) {
     }, options)
   }
 
-  async function reconcileGroup(sessionRef, groupId) {
+  async function reconcileGroup(sessionRef, groupId, { updateSession = true } = {}) {
     if (!groupId) return
     await db.runTransaction(async tx => {
       const ss = await tx.get(sessionRef)
@@ -176,7 +176,7 @@ function createGroupLifecycle({ db, stamp, HttpsError, getPhaseSequence }) {
       }
       for (const p of g.members) if (patches.has(p.id)) tx.update(p.ref, { status: patches.get(p.id) })
     }, options)
-    await maybeAdvanceSession(sessionRef)
+    if (updateSession) await maybeAdvanceSession(sessionRef)
   }
 
   async function detachParticipant(sessionRef, uid, opts = {}) {

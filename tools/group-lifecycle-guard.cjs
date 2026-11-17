@@ -288,6 +288,12 @@ test('Account-deletion activeOnly detachment preserves completed gameplay record
  assert(result.skipped);assert.deepEqual(m.read(m.p(1)),before);assert(m.read(m.g(0)).members.includes('u1'))
 })
 
+test('Participant recovery advances its group without scanning the whole session',async m=>{
+ await joinMany(m,3);finishIndividual(m,[1,2,3]);await m.lifecycle.reconcileGroup(m.sessionRef,'g0',{updateSession:false})
+ states(m,[1,2,3],'group');assert.equal(m.read(m.sessionRef.path).status,'individual')
+ await m.lifecycle.maybeAdvanceSession(m.sessionRef);assert.equal(m.read(m.sessionRef.path).status,'group')
+})
+
 ;(async()=>{
  let failed=0;const summary=[]
  for(const {name,body}of tests){const model=createModel();try{await body(model);console.log('PASS '+name);summary.push({name,passed:true,...model.stats})}catch(error){failed++;console.error('FAIL '+name+'\n'+error.stack);summary.push({name,passed:false,error:error.message,...model.stats})}}
