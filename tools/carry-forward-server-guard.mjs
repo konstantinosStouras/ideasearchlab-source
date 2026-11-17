@@ -27,7 +27,7 @@
    Advance): the per-participant TRANSACTION retries from the fresh documents
    and decides again, so the new pick is honoured and the cap is never
    exceeded. The status flip and the ordering (top-up before the status
-   batch) are asserted from the write log.
+   transaction) are asserted from the write log.
    ========================================================================== */
 import { createRequire } from 'node:module'
 import Module from 'node:module'
@@ -50,6 +50,9 @@ const check = (name, cond, detail) => {
 function makeDb() {
   const store = new Map()            // path -> { data, updateTime }
   const log = []                     // every committed write, in order
+  const collectionVersions = new Map() // catches query-result phantoms
+  let transactionSequence = 0
+  const collectionPath = path => path.slice(0, path.lastIndexOf('/'))
   let clock = 0
   const tick = () => ++clock
   const docRef = path => ({
@@ -69,11 +72,13 @@ function makeDb() {
     }
     const data = kind === 'set' ? { ...patch } : { ...(cur ? cur.data : {}), ...patch }
     store.set(path, { data, updateTime: tick() })
+    collectionVersions.set(collectionPath(path), clock)
     log.push({ path, patch: { ...patch }, kind })
   }
   const collRef = path => {
     const filters = []
     const q = {
+      path, kind: 'query',
       doc: id => docRef(`${path}/${id}`),
       where(field, op, value) { filters.push({ field, op, value }); return q },
       async get() {
@@ -97,9 +102,17 @@ function makeDb() {
     async runTransaction(fn) {
       for (let attempt = 0; attempt < 5; attempt++) {
         const reads = new Map()   // path -> updateTime at read
+        const queryReads = new Map() // collection -> revision at query read
         const writes = []
         const tx = {
           async get(ref) {
+            if (writes.length) throw new Error('Transaction reads must precede writes')
+            if (ref.kind === 'query') {
+              queryReads.set(ref.path, collectionVersions.get(ref.path) || 0)
+              const result = await ref.get()
+              for (const snap of result.docs) reads.set(snap.ref.path, snap.updateTime)
+              return result
+            }
             const r = store.get(ref.path)
             reads.set(ref.path, r ? r.updateTime : null)
             return { exists: !!r, id: ref.path.split('/').pop(), ref, data: () => (r ? { ...r.data } : undefined), get: f => (r ? r.data[f] : undefined), updateTime: r && r.updateTime }
@@ -110,8 +123,10 @@ function makeDb() {
         const result = await fn(tx)
         if (db.onAfterRead) { const hook = db.onAfterRead; db.onAfterRead = null; hook() }
         const conflict = [...reads].some(([path, t]) => { const r = store.get(path); return (r ? r.updateTime : null) !== t })
+          || [...queryReads].some(([path, t]) => (collectionVersions.get(path) || 0) !== t)
         if (conflict) { txRetries++; continue }
-        writes.forEach(w => applyWrite(w.ref.path, w.patch, undefined, w.kind))
+        const transaction = ++transactionSequence
+        writes.forEach(w => { applyWrite(w.ref.path, w.patch, undefined, w.kind); log.at(-1).transaction = transaction })
         return result
       }
       const e = new Error('too much contention'); e.code = 'aborted'; throw e
@@ -138,9 +153,9 @@ function makeDb() {
     },
   }
   let txRetries = 0
-  const seed = (path, data) => store.set(path, { data: { ...data }, updateTime: tick() })
+  const seed = (path, data) => { store.set(path, { data: { ...data }, updateTime: tick() }); collectionVersions.set(collectionPath(path), clock) }
   const read = path => { const r = store.get(path); return r ? { ...r.data } : undefined }
-  const touch = path => { const r = store.get(path); store.set(path, { data: r.data, updateTime: tick() }) }
+  const touch = path => { const r = store.get(path); store.set(path, { data: r.data, updateTime: tick() }); collectionVersions.set(collectionPath(path), clock) }
   const write = (path, patch) => applyWrite(path, patch, undefined, 'update')
   return { db, store, log, seed, read, touch, write, retries: () => txRetries }
 }
@@ -180,6 +195,9 @@ function fixture() {
   P('P1'); P('P2', { status: 'waiting_for_group', individualComplete: true }); P('P3'); P('P4'); P('P5', { removed: true, status: 'removed' })
   P('P6', { status: 'waiting_for_group', individualComplete: true })
   P('P7', { status: 'waiting_for_group', individualComplete: true })
+  P('P8', { status: 'done', surveyAnswers: { q: 5 } })
+  P('P9', { status: 'survey' })
+  P('P10', { status: 'individual', surveyCompletedAt: { seconds: 1 } })
   const I = (id, authorId, extra) => f.seed(`sessions/S/ideas/${id}`, { authorId, phase: 'individual', title: id, selected: false, ...extra })
   // P1: 5 ideas, one ticked by hand
   I('a1', 'P1'); I('a2', 'P1', { selected: true, selectedBy: 'participant' }); I('a3', 'P1'); I('a4', 'P1'); I('a5', 'P1')
@@ -196,6 +214,7 @@ function fixture() {
   // P7 submitted under THIS rule but SHORT (their ideas batch was refused, or the
   // cap was raised after): completed, one TAGGED pick of four
   I('h1', 'P7', { selected: true, selectedBy: 'participant' }); I('h2', 'P7'); I('h3', 'P7'); I('h4', 'P7')
+  I('i1', 'P8'); I('j1', 'P9'); I('k1', 'P10')
   // a group-stage idea must be ignored by the top-up
   I('g1', 'P1', { phase: 'group', groupId: 'g1' })
   return f
@@ -231,9 +250,17 @@ console.log('\n1. advancePhase individual → group tops up everyone entering th
     ideasOf(f, 'P7').filter(i => i.selected).length === 3 && f.read('sessions/S/ideas/h1').selectedBy === 'participant' && ideasOf(f, 'P7').filter(i => i.selectedBy === 'computer').length === 2, JSON.stringify(ideasOf(f, 'P7').map(i => [i.id, i.selected, i.selectedBy])))
   const statuses = ['P1', 'P2', 'P3', 'P4', 'P6', 'P7'].map(id => f.read(`sessions/S/participants/${id}`).status)
   check('P1–P4, P6 and P7 are moved to the group phase', statuses.every(s => s === 'group'), statuses.join(','))
+  check('finished, later-phase, and completion-stamped participants keep their ideas and statuses',
+    ['i1', 'j1', 'k1'].every(id => !f.log.some(w => w.path === 'sessions/S/ideas/' + id)) &&
+    f.read('sessions/S/participants/P8').status === 'done' && f.read('sessions/S/participants/P9').status === 'survey' &&
+    f.read('sessions/S/participants/P10').status === 'individual')
   const firstIdeaWrite = f.log.findIndex(w => w.path.startsWith('sessions/S/ideas/'))
+  const lastIdeaWrite = f.log.findLastIndex(w => w.path.startsWith('sessions/S/ideas/'))
   const firstStatusWrite = f.log.findIndex(w => w.path.startsWith('sessions/S/participants/') && w.patch && w.patch.status === 'group')
-  check('the top-up lands BEFORE the participants\' status flip', firstIdeaWrite >= 0 && firstStatusWrite > firstIdeaWrite, `ideas@${firstIdeaWrite} status@${firstStatusWrite}`)
+  check('the top-up lands BEFORE the participants\' status flip', firstIdeaWrite >= 0 && firstStatusWrite > lastIdeaWrite, `ideas@${firstIdeaWrite} status@${firstStatusWrite}`)
+  const phaseWrites = f.log.filter(w => (w.path === 'sessions/S' || w.path.startsWith('sessions/S/participants/')) && w.patch?.status === 'group')
+  check('session and participant phase changes commit in one transaction after all idea top-ups',
+    phaseWrites.length === 7 && phaseWrites.every(w => Number.isInteger(w.transaction)) && new Set(phaseWrites.map(w => w.transaction)).size === 1)
   check('every idea write carries only the two fields', f.log.filter(w => w.path.startsWith('sessions/S/ideas/')).every(w => JSON.stringify(Object.keys(w.patch).sort()) === JSON.stringify(['selected', 'selectedBy'])))
   // Idempotent: a second advance from group would not touch ideas; but re-running the
   // top-up over the now-tagged documents must be a no-op — simulate by resetting status.
@@ -286,6 +313,40 @@ console.log('\n3. guards')
   g.seed('sessions/S/participants/P1', { uid: 'P1', status: 'waiting', individualComplete: false })
   await session.advancePhase({ sessionId: 'S' }, { auth: { uid: 'INSTR' } })
   check('group_first: entering the group phase with no individual ideas writes none', g.read('sessions/S').status === 'group' && !g.log.some(w => w.path.startsWith('sessions/S/ideas/')))
+}
+
+
+/* Removal and closure after top-up reads must invalidate the transaction. */
+console.log('\n4. top-up conflicts with participant removal or session closure')
+{
+  const f = fixture(); current = f
+  const originalIdeas = JSON.stringify(ideasOf(f, 'P1'))
+  f.db.onAfterRead = () => f.write('sessions/S/participants/P1', { removed: true, status: 'removed', groupId: null })
+  await session.advancePhase({ sessionId: 'S' }, { auth: { uid: 'INSTR' } })
+  check('removal after top-up read forces a transaction retry', f.retries() >= 1)
+  check('removed participant receives no stale idea writes and keeps the exact original selection',
+    !f.log.some(w => w.path.startsWith('sessions/S/ideas/a')) && JSON.stringify(ideasOf(f, 'P1')) === originalIdeas)
+  check('phase advance does not resurrect the concurrently removed participant',
+    f.read('sessions/S/participants/P1').status === 'removed' && f.read('sessions/S/participants/P1').groupId === null &&
+    !f.log.some(w => w.path === 'sessions/S/participants/P1' && w.patch?.status === 'group'))
+  check('removal does not block other participants topping up and advancing',
+    ideasOf(f, 'P3').filter(i => i.selectedBy === 'computer').length === 2 &&
+    f.read('sessions/S/participants/P3').status === 'group' && f.read('sessions/S').status === 'group')
+}
+{
+  const f = fixture(); current = f
+  const originalIdeas = JSON.stringify([...f.store].filter(([path]) => path.startsWith('sessions/S/ideas/')).map(([path, row]) => [path, row.data]))
+  f.db.onAfterRead = () => f.write('sessions/S', { status: 'done' })
+  let error
+  try { await session.advancePhase({ sessionId: 'S' }, { auth: { uid: 'INSTR' } }) } catch (e) { error = e }
+  check('closure after top-up read forces a retry and final advance is rejected',
+    f.retries() >= 1 && error?.code === 'failed-precondition', error?.message)
+  check('closed session receives no stale idea writes for any participant',
+    !f.log.some(w => w.path.startsWith('sessions/S/ideas/')) &&
+    JSON.stringify([...f.store].filter(([path]) => path.startsWith('sessions/S/ideas/')).map(([path, row]) => [path, row.data])) === originalIdeas)
+  check('closure remains terminal and no participant phase is changed',
+    f.read('sessions/S').status === 'done' && !f.log.some(w => w.path.startsWith('sessions/S/participants/')) &&
+    f.log.filter(w => w.path === 'sessions/S' && w.patch?.status).every(w => w.patch.status === 'done'))
 }
 
 console.log(fail ? `\n${fail} check(s) FAILED` : '\nAll checks passed')

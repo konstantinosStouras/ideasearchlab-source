@@ -9,6 +9,7 @@ import { getRegistration, COUNTRIES } from '../data/formDefaults'
 import { markTiming, readTiming, clearTiming } from '../utils/timing'
 import { isPreview } from '../utils/preview'
 import { randomRegistrationAnswers } from '../utils/testData'
+import { retrySessionJoin } from '../utils/retrySessionJoin'
 import RichText from '../components/RichText'
 import HeaderControls from '../components/HeaderControls'
 import styles from './Registration.module.css'
@@ -29,6 +30,7 @@ export default function Registration() {
   const [consents, setConsents] = useState({})
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [joinRetrying, setJoinRetrying] = useState(false)
   // Silent registration (platform launches): null = normal form,
   // 'submitting' = auto-submitting invisibly. Consent statements are carried
   // from the platform launch too (the platform's terms cover them — owner
@@ -100,8 +102,11 @@ export default function Registration() {
 
   async function completeRegistration(values, silent) {
     const functions = getFunctions(undefined, 'europe-west1')
-    const joinSession = httpsCallable(functions, 'joinSession')
-    await joinSession({ code: session.code })
+    const joinSession = httpsCallable(functions, 'joinSession', { timeout: 45000 })
+    setJoinRetrying(false)
+    try {
+      await retrySessionJoin(joinSession, { code: session.code }, { onRetry: () => setJoinRetrying(true) })
+    } finally { setJoinRetrying(false) }
 
     const demographics = {}
     fields.forEach(f => {
@@ -295,6 +300,7 @@ export default function Registration() {
               </>
             )}
 
+            {joinRetrying && <p role="status">Many participants are joining. Retrying automatically...</p>}
             {error && <p className="error-msg">{error}</p>}
 
             <div className={styles.submitRow}>
