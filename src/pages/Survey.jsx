@@ -49,7 +49,9 @@ export default function Survey() {
           updateDoc(doc(db, 'sessions', sessionId, 'participants', user.uid),
             { 'timing.surveyOpenedAt': serverTimestamp() }).catch(() => {})
         }
-        if (data.status === 'done') navigate(`/session/${sessionId}/done`)
+        // Local snapshots include unacknowledged writes. Do not show completion
+        // until the survey is saved: reloading that screen can otherwise lose it.
+        if (data.status === 'done' && !snap.metadata?.hasPendingWrites) navigate(`/session/${sessionId}/done`)
       }
     )
     return unsub
@@ -126,6 +128,9 @@ export default function Survey() {
       })
       setSubmitted(true)
       try { sessionStorage.removeItem(draftKey) } catch (e) { /* ignore */ }
+      // Awaited updateDoc is the save acknowledgement. Navigate here as well
+      // because metadata-only snapshot acknowledgements are not subscribed.
+      navigate(`/session/${sessionId}/done`)
     } catch (err) {
       // A failed submit used to log to the console and silently re-enable the
       // button, so the participant could not tell their answers had NOT been
