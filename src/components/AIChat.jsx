@@ -7,6 +7,7 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useAuth } from '../context/AuthContext'
 import styles from './AIChat.module.css'
+import { retryCallable } from '../utils/retrySessionJoin'
 
 // Render assistant Markdown safely: GitHub-flavoured Markdown -> HTML, then
 // sanitise to a small tag allow-list so things like **bold**, *italic*, # and
@@ -125,26 +126,27 @@ export default function AIChat({ sessionId, scope, scopeId, aiConfig }) {
 
     try {
       // Optimistically add user message to Firestore
-      if (postedRef.current !== `${scope}:${scopeId}:${text}`) {
-      await addDoc(collection(db, chatPath), {
-        role: 'user',
-        text,
-        scope,
-        scopeId,
-        authorId: user.uid,
-        authorName: authorLabel(user.uid),
-        timestamp: serverTimestamp(),
+      if (postedRef.current?.key !== `${scope}:${scopeId}:${text}`) {
+        const posted = await addDoc(collection(db, chatPath), {
+          role: 'user',
+          text,
+          scope,
+          scopeId,
+          authorId: user.uid,
+          authorName: authorLabel(user.uid),
+          timestamp: serverTimestamp(),
       })
 
-      postedRef.current = `${scope}:${scopeId}:${text}`
+      postedRef.current = { key: `${scope}:${scopeId}:${text}`, id: posted.id }
       }
       // Call Cloud Function to get AI response
-      const sendAIMessage = httpsCallable(functions, 'sendAIMessage')
-      await sendAIMessage({
+      const sendAIMessage = httpsCallable(functions, 'sendAIMessage', { timeout: 125000 })
+      await retryCallable(sendAIMessage, {
         sessionId,
         scope,
         scopeId,
         userMessage: text,
+        requestId: postedRef.current.id,
       })
       postedRef.current = null
     } catch (err) {
@@ -281,3 +283,4 @@ export default function AIChat({ sessionId, scope, scopeId, aiConfig }) {
     </div>
   )
 }
+

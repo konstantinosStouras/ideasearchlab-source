@@ -1,7 +1,7 @@
 // Joining is idempotent on the server (one membership per authenticated UID).
 // A classroom burst may be rejected by the platform before the callable runs.
 // Retry only transient failures, with jitter so students do not retry together.
-export async function retrySessionJoin(join, payload, options = {}) {
+export async function retryCallable(join, payload, options = {}) {
   const { onRetry = () => {}, timeoutMs = 240000, maxAttempts = 40,
     now = () => performance.now(), random = Math.random,
     sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = options
@@ -20,3 +20,5 @@ export async function retrySessionJoin(join, payload, options = {}) {
     }
   }
 }
+
+export const retrySessionJoin = retryCallable

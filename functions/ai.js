@@ -2,6 +2,7 @@ const functionsV1 = require('firebase-functions/v1')
 const functions = functionsV1.region('europe-west1')
 const { HttpsError } = functionsV1.https
 const admin = require('firebase-admin')
+const { withAIRequest } = require('./aiRequest')
 
 const db = admin.firestore()
 
@@ -288,10 +289,10 @@ async function callLLM(messages, config) {
  * sendAIMessage
  * Called from AIChat component.
  */
-exports.sendAIMessage = functions.https.onCall(async (data, context) => {
+exports.sendAIMessage = functionsV1.runWith({ timeoutSeconds: 120 }).region('europe-west1').https.onCall(async (data, context) => {
   if (!context.auth) throw new HttpsError('unauthenticated', 'Must be logged in.')
 
-  const { sessionId, scope, scopeId, userMessage } = data
+  const { sessionId, scope, scopeId, userMessage, requestId } = data
   if (!sessionId || !['individual', 'group'].includes(scope) || !scopeId || typeof userMessage !== 'string' || !userMessage.trim()) {
     throw new HttpsError('invalid-argument', 'Missing required fields.')
   }
@@ -327,47 +328,45 @@ exports.sendAIMessage = functions.https.onCall(async (data, context) => {
     throw new HttpsError('permission-denied', 'AI not enabled for group phase.')
   }
 
-  const config = resolveAIConfig(session.aiConfig, globalSettings, scope)
+  return withAIRequest(db, { sessionId, requestId, uid: context.auth.uid, scope, scopeId, userMessage }, async () => {
+    const config = resolveAIConfig(session.aiConfig, globalSettings, scope)
 
-  // Load conversation history
-  const historySnap = await db
-    .collection('sessions').doc(sessionId)
-    .collection('aiMessages')
-    .where('scope', '==', scope)
-    .where('scopeId', '==', scopeId)
-    .orderBy('timestamp', 'asc')
-    .get()
+    // Load conversation history
+    const historySnap = await db
+      .collection('sessions').doc(sessionId)
+      .collection('aiMessages')
+      .where('scope', '==', scope)
+      .where('scopeId', '==', scopeId)
+      .orderBy('timestamp', 'asc')
+      .get()
 
-  const history = historySnap.docs.map(d => ({
-    role: d.data().role === 'assistant' ? 'assistant' : 'user',
-    content: d.data().text,
-  }))
+    const history = historySnap.docs.map(d => ({
+      role: d.data().role === 'assistant' ? 'assistant' : 'user',
+      content: d.data().text,
+    }))
 
-  // The client awaits its own addDoc before calling this, so the message is
-  // already the last row of `history` — pushing it again sent the question to
-  // the model twice, inflating the billed input tokens (and therefore the
-  // export's AI-usage cost columns) on every single turn.
-  if (history[history.length - 1]?.content !== userMessage) {
-    history.push({ role: 'user', content: userMessage })
-  }
+    // The client awaits its own addDoc before calling this, so the message is
+    // already the last row of `history` — pushing it again sent the question to
+    // the model twice, inflating the billed input tokens (and therefore the
+    // export's AI-usage cost columns) on every single turn.
+    if (history[history.length - 1]?.content !== userMessage) {
+      history.push({ role: 'user', content: userMessage })
+    }
 
-  // The window must OPEN on a user turn: history strictly alternates, so a plain
-  // slice lands on an assistant turn once the conversation passes contextWindow
-  // messages — which Anthropic rejects outright, so the assistant went silent
-  // for the rest of that participant's session with the prompt already logged.
-  const window = history.slice(-config.contextWindow)
-  while (window.length && window[0].role !== 'user') window.shift()
+    // The window must OPEN on a user turn: history strictly alternates, so a plain
+    // slice lands on an assistant turn once the conversation passes contextWindow
+    // messages — which Anthropic rejects outright, so the assistant went silent
+    // for the rest of that participant's session with the prompt already logged.
+    const window = history.slice(-config.contextWindow)
+    while (window.length && window[0].role !== 'user') window.shift()
 
-  // Time the provider call so we can report how long each AI reply took.
-  const genStart = Date.now()
-  const { text: assistantText, inputTokens, outputTokens } =
-    await callLLM(window, config)
-  const generationMs = Date.now() - genStart
+    // Time the provider call so we can report how long each AI reply took.
+    const genStart = Date.now()
+    const { text: assistantText, inputTokens, outputTokens } =
+      await callLLM(window, config)
+    const generationMs = Date.now() - genStart
 
-  await db
-    .collection('sessions').doc(sessionId)
-    .collection('aiMessages')
-    .add({
+  return {
       role: 'assistant',
       text: assistantText,
       scope,
@@ -382,9 +381,8 @@ exports.sendAIMessage = functions.https.onCall(async (data, context) => {
       // How long the provider took to generate this reply (ms).
       generationMs,
       timestamp: admin.firestore.FieldValue.serverTimestamp(),
-    })
-
-  return { text: assistantText }
+    }
+  })
 })
 
 /**
@@ -441,4 +439,5 @@ exports.saveAISettings = functions.https.onCall(async (data, context) => {
 
   return { success: true }
 })
+
 
