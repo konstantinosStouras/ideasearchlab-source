@@ -7,7 +7,7 @@ const db = admin.firestore()
 
 // Events locate a group. Transactions decide from the current roster and
 // current completion flags, never from a delayed event's participant snapshot.
-exports.autoGroupParticipants = functions.firestore
+exports.autoGroupParticipants = functionsV1.runWith({ failurePolicy: true }).region('europe-west1').firestore
   .document('sessions/{sessionId}/participants/{participantId}')
   .onUpdate(async (change, context) => {
     const before = change.before.data(), after = change.after.data()

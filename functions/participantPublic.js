@@ -22,7 +22,7 @@ async function syncParticipant(ref) {
   })
 }
 exports.publicParticipant = publicParticipant
-exports.syncParticipantPublic = functions.firestore
+exports.syncParticipantPublic = require('firebase-functions/v1').runWith({ failurePolicy: true }).region('europe-west1').firestore
   .document('sessions/{sessionId}/participants/{participantId}')
   .onWrite((change) => syncParticipant(change.after.ref))
 // Backfills existing groups on entry without exposing private source documents.

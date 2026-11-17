@@ -390,7 +390,7 @@ async function maybeAdvanceSession(sessionRef, statusHint) {
  *     if a per-group trigger was missed and participants advanced themselves.
  *     Never to 'done' — sessions close only by instructor action.
  */
-exports.onParticipantUpdated = functions.firestore
+exports.onParticipantUpdated = functionsV1.runWith({ failurePolicy: true }).region('europe-west1').firestore
   .document('sessions/{sessionId}/participants/{participantId}')
   .onUpdate(async (change, context) => {
     const before = change.before.data()
