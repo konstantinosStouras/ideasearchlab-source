@@ -240,6 +240,9 @@ export default function GroupPhase() {
   const members = useGroupRoster(sessionId, groupId)
   const [memberLabels, setMemberLabels] = useState({})
   const [ideas, setIdeas] = useState({ individual: [], group: [] })
+  // Do not lock an overdue ballot against the temporary empty loading pool.
+  // Wait for a server snapshot for this exact group and roster.
+  const [ideasReadyFor, setIdeasReadyFor] = useState(null)
   const [newTitle, setNewTitle] = useState('')
   const [newDesc, setNewDesc] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -530,6 +533,8 @@ export default function GroupPhase() {
   // re-delivered the lot. That churn is what made the ideas list re-render (and
   // a tap land on the wrong card) while people were voting.
   const memberKey = members.map(m => m.id).sort().join(',')
+  const ideaScope = sessionId && groupId && memberKey ? `${sessionId}/${groupId}/${memberKey}` : null
+  const ideasReady = !!ideaScope && ideasReadyFor === ideaScope
   const myUid = user?.uid
   // Each member's document, for the legacy gate below. Read through a ref so
   // the listener effect keys on the stable memberKey, not the members array.
@@ -581,7 +586,9 @@ export default function GroupPhase() {
         collection(db, 'sessions', sessionId, 'ideas'),
         where('authorId', 'in', memberIds.slice(0, 30))
       ),
+      { includeMetadataChanges: true },
       snap => {
+        if (!snap.metadata?.fromCache) setIdeasReadyFor(ideaScope)
         const all = snap.docs.map(d => ({ id: d.id, ...d.data() }))
         const membersById = membersByIdRef.current
 
@@ -719,7 +726,7 @@ export default function GroupPhase() {
 
   // ── Submit / lock votes ─────────────────────────────
   async function submitVotes(force = false) {
-    if (ballotBusy.current || myVoteCount < requiredVotes || votesLocked || !sessionId || !user) return
+    if (!ideasReady || ballotBusy.current || myVoteCount < requiredVotes || votesLocked || !sessionId || !user) return
     // Re-show the consensus reminder if the group's votes are diverging — unless
     // the participant chose to submit anyway from that reminder.
     if (!force && consensusMeasurable && !consensusReached) {
@@ -753,7 +760,7 @@ export default function GroupPhase() {
   // can never stall on one member; the onParticipantUpdated trigger then
   // tallies and advances the group once everyone is locked.
   const autoSubmitVotes = useCallback(async () => {
-    if (ballotBusy.current || votesLocked || !sessionId || !user) return
+    if (!ideasReady || ballotBusy.current || votesLocked || !sessionId || !user) return
     setSubPhase('voting')
     try {
       await updateDoc(
@@ -780,7 +787,7 @@ export default function GroupPhase() {
       console.error('Auto-submit votes error:', err)
       setVoteError('Automatic submission failed. Please check your connection and submit again.')
     }
-  }, [votesLocked, sessionId, user, groupVotingStartedAt, requiredVotes])
+  }, [ideasReady, votesLocked, sessionId, user, groupVotingStartedAt, requiredVotes])
 
   // ── Which countdown is live right now ───────────────
   // Split sessions run two clocks: the ideation clock until the group moves on
@@ -1068,7 +1075,7 @@ export default function GroupPhase() {
               {/* Only offered when this ballot could actually be submitted —
                   below the required count `submitVotes` silently does nothing,
                   which read as a dead button. */}
-              {myVoteCount >= requiredVotes && !votesLocked && (
+              {ideasReady && myVoteCount >= requiredVotes && !votesLocked && (
                 <button
                   className={`btn-primary ${styles.consensusBtn}`}
                   type="button"
@@ -1341,7 +1348,7 @@ export default function GroupPhase() {
               <button
                 className={styles.proceedBtn}
                 onClick={() => submitVotes()}
-                disabled={votePending || myVoteCount < requiredVotes}
+                disabled={!ideasReady || votePending || myVoteCount < requiredVotes}
               >
                 Submit Votes
               </button>

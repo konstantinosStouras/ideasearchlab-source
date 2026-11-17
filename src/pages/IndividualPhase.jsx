@@ -49,6 +49,11 @@ export default function IndividualPhase() {
   const aiModel = useAIModelLabel()
 
   const [ideas, setIdeas] = useState([])
+  // An overdue timer may mount before the ideas query returns. Only a server
+  // snapshot can distinguish an empty submission from ideas still loading.
+  const [ideasReadyFor, setIdeasReadyFor] = useState(null)
+  const ideaScope = sessionId && user ? `${sessionId}/${user.uid}` : null
+  const ideasReady = !!ideaScope && ideasReadyFor === ideaScope
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -132,7 +137,8 @@ export default function IndividualPhase() {
       where('phase', '==', 'individual'),
       orderBy('createdAt', 'asc')
     )
-    const unsub = onSnapshot(q, snap => {
+    let hydrationPending = true
+    const unsub = onSnapshot(q, { includeMetadataChanges: true }, snap => {
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       setIdeas(list)
       // Seed the selection state from the documents on a reload: every idea
@@ -147,8 +153,19 @@ export default function IndividualPhase() {
         if (by) sel.add(idea.id)
         if (by === SELECTED_BY.COMPUTER) auto.add(idea.id)
       })
-      setSelectedIds(prev => prev.size === 0 && sel.size > 0 ? sel : prev)
-      setComputerIds(prev => prev.size === 0 && auto.size > 0 ? auto : prev)
+      if (hydrationPending) {
+        // A cached pick may have changed on another device. Replace it with
+        // the first server result before an overdue timer can submit it.
+        setSelectedIds(sel)
+        setComputerIds(auto)
+        if (!snap.metadata?.fromCache) {
+          hydrationPending = false
+          setIdeasReadyFor(ideaScope)
+        }
+      } else {
+        setSelectedIds(prev => prev.size === 0 && sel.size > 0 ? sel : prev)
+        setComputerIds(prev => prev.size === 0 && auto.size > 0 ? auto : prev)
+      }
     })
     return unsub
   }, [sessionId, user])
@@ -268,7 +285,7 @@ export default function IndividualPhase() {
   // individualSelectionStartedAt once — the anchor for the selection
   // countdown (and the ideas-vs-selection split in the export's Timing sheet).
   function goToSelection() {
-    if (!selectionStage || stageRef.current === 'selection' || done) return
+    if (!ideasReady || !selectionStage || stageRef.current === 'selection' || done) return
     stageRef.current = 'selection'
     setStage('selection')
     setEditingId(null) // an idea left open in the editor isn't editable here
@@ -374,7 +391,7 @@ export default function IndividualPhase() {
     // whose closure can still see `done === false` while a click handler from an
     // earlier render fires in the same frame — two submits whose batches then
     // raced to decide the carried set.
-    if (submittedRef.current || done) return
+    if (!ideasReady || submittedRef.current || done) return
     submittedRef.current = true
     setSubmitError('')
     setDone(true)
@@ -479,14 +496,14 @@ export default function IndividualPhase() {
       return {
         phaseStartedAt: individualStartedAt,
         durationSeconds: timers.total,
-        onExpire: done ? undefined : autoFinish,
+        onExpire: done || !ideasReady ? undefined : autoFinish,
       }
     }
     if (selectionStartedAt) {
       return {
         phaseStartedAt: selectionStartedAt,
         durationSeconds: timers.second,
-        onExpire: done ? undefined : autoFinish,
+        onExpire: done || !ideasReady ? undefined : autoFinish,
       }
     }
     return {
@@ -496,7 +513,7 @@ export default function IndividualPhase() {
       // forward — but with no selection stage, or nothing written to select
       // from, submit instead so a participant is never parked on a stage they
       // cannot complete.
-      onExpire: done
+      onExpire: done || !ideasReady
         ? undefined
         : (selectionStage && ideas.length > 0 ? goToSelection : autoFinish),
     }
@@ -663,7 +680,7 @@ export default function IndividualPhase() {
   // ─── Workspace view ───
   const atMax = ideas.length >= maxIdeas
   const hasSelection = selectedIds.size > 0
-  const canFinish = ideas.length > 0 && (!groupPhaseActive || hasSelection) && !done
+  const canFinish = ideasReady && ideas.length > 0 && (!groupPhaseActive || hasSelection) && !done
   // Ideas are written in the generation stage only; the selection stage is for
   // choosing which of them carry forward.
   const canAddIdeas = !done && !isSelecting
@@ -685,7 +702,7 @@ export default function IndividualPhase() {
             <button
               className={styles.proceedBtn}
               onClick={goToSelection}
-              disabled={ideas.length === 0}
+              disabled={!ideasReady || ideas.length === 0}
               title={ideas.length === 0
                 ? 'Add at least one idea first'
                 : `Move on to choosing the ${ideasCarried} ideas you carry into the group phase`}

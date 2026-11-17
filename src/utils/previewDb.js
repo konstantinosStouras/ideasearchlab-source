@@ -114,6 +114,7 @@ function docSnap(path) {
     id: path.split('/').pop(),
     ref: { __ref: 'doc', path },
     exists: () => data !== undefined,
+    metadata: { fromCache: false, hasPendingWrites: false },
     data: () => (data !== undefined ? { ...data } : undefined),
   }
 }
@@ -121,12 +122,16 @@ function collSnap(rows) {
   const docs = rows.map(r => ({
     id: r.id, ref: { __ref: 'doc', path: r.path }, exists: true, data: () => ({ ...r.data }),
   }))
-  return { docs, size: docs.length, empty: docs.length === 0, forEach: fn => docs.forEach(fn) }
+  return { docs, size: docs.length, empty: docs.length === 0, metadata: { fromCache: false, hasPendingWrites: false }, forEach: fn => docs.forEach(fn) }
 }
 
 function notify() { listeners.slice().forEach(l => { try { l.fire() } catch (e) { console.error(e) } }) }
 
-export function onSnapshot(refOrQuery, cb, errCb) {
+export function onSnapshot(refOrQuery, optionsOrCb, cbOrErr, optionalErr) {
+  // Match Firestore's optional SnapshotListenOptions overload. Preview writes
+  // are synchronous, so every snapshot is already current and committed.
+  const cb = typeof optionsOrCb === 'function' ? optionsOrCb : cbOrErr
+  const errCb = typeof optionsOrCb === 'function' ? cbOrErr : optionalErr
   const fire = () => {
     try {
       if (refOrQuery.__ref === 'doc') cb(docSnap(refOrQuery.path))
