@@ -132,7 +132,7 @@ exports.deleteSessionDeep = functions
 // Bound concurrent writers to the enrollment counter. Excess HTTP requests
 // queue at the service instead of overwhelming one Firestore document with
 // competing transactions; membership remains atomic and retries idempotent.
-exports.joinSession = functions.runWith({ timeoutSeconds: 120, maxInstances: 8 }).https.onCall(async (data, context) => {
+exports.joinSession = functions.runWith({ timeoutSeconds: 120, minInstances: 2, maxInstances: 16 }).https.onCall(async (data, context) => {
   if (!context.auth) throw new HttpsError('unauthenticated', 'Must be logged in.')
 
   const { code } = data

@@ -289,7 +289,7 @@ async function callLLM(messages, config) {
  * sendAIMessage
  * Called from AIChat component.
  */
-exports.sendAIMessage = functionsV1.runWith({ timeoutSeconds: 120 }).region('europe-west1').https.onCall(async (data, context) => {
+exports.sendAIMessage = functionsV1.runWith({ timeoutSeconds: 120, minInstances: 4 }).region('europe-west1').https.onCall(async (data, context) => {
   if (!context.auth) throw new HttpsError('unauthenticated', 'Must be logged in.')
 
   const { sessionId, scope, scopeId, userMessage, requestId } = data
@@ -297,9 +297,11 @@ exports.sendAIMessage = functionsV1.runWith({ timeoutSeconds: 120 }).region('eur
     throw new HttpsError('invalid-argument', 'Missing required fields.')
   }
 
-  const [sessionSnap, globalSettings] = await Promise.all([
-    db.collection('sessions').doc(sessionId).get(),
+  const sessionRef = db.collection('sessions').doc(sessionId)
+  const [sessionSnap, globalSettings, callerSnap] = await Promise.all([
+    sessionRef.get(),
     loadGlobalAISettings(),
+    sessionRef.collection('participants').doc(context.auth.uid).get(),
   ])
 
   if (!sessionSnap.exists) throw new HttpsError('not-found', 'Session not found.')
@@ -310,8 +312,6 @@ exports.sendAIMessage = functionsV1.runWith({ timeoutSeconds: 120 }).region('eur
   // silently for every visitor) could pass another group's deterministic id —
   // g0, g1, … — and have the model read back that group's private transcript,
   // write an assistant turn into their panel, and spend the instructor's API key.
-  const callerSnap = await db.collection('sessions').doc(sessionId)
-    .collection('participants').doc(context.auth.uid).get()
   if (!callerSnap.exists) {
     throw new HttpsError('permission-denied', 'Not a participant of this session.')
   }
